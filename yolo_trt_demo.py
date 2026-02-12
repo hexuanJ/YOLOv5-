@@ -114,13 +114,13 @@ class YoLov5TRT(object):
         self.bindings = bindings
         self.batch_size = engine.max_batch_size
 
-    def infer(self):
+    def infer(self, camera_index=0):
     
         
         
         categories = ["person", 'vest','blue','red','white','yellow']
     
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(camera_index)
         
 
         while True:
@@ -394,8 +394,7 @@ if __name__ == "__main__":
 
     yolov5_wrapper = YoLov5TRT(engine_file_path)
 
-    # 让 infer 使用可配置摄像头（你也可以继续写死 0，但参数更好）
-    yolov5_wrapper.infer(camera_index=args.camera)exit(1)
+    yolov5_wrapper.infer(camera_index=args.camera)
 
             
 
