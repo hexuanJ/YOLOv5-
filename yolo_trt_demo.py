@@ -376,27 +376,26 @@ class YoLov5TRT(object):
 
 
 
-
 if __name__ == "__main__":
+    import argparse
+
     if not USE_TENSORRT:
         print("TensorRT and pycuda are required for this demo. Please install them or use demo.py instead.")
         sys.exit(0)
-    
-    # load custom plugin and engine
-    PLUGIN_LIBRARY = "build/libmyplugins.so"
-    engine_file_path = "build/yolov5n.engine"
 
-    try:
-        ctypes.CDLL(PLUGIN_LIBRARY)
-        
-        # a YoLov5TRT instance
-        yolov5_wrapper = YoLov5TRT(engine_file_path)
-        yolov5_wrapper.infer()
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        print("Please make sure the TensorRT engine file and plugin library are built correctly.")
-        print("For more information, refer to the README.md file.")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--engine", type=str, default="weights/ppe_yolo_n.engine", help="TensorRT engine file path")
+    parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index")
+    args = parser.parse_args()
+
+    engine_file_path = args.engine
+    if not os.path.exists(engine_file_path):
+        raise FileNotFoundError(f"Engine file not found: {engine_file_path}")
+
+    yolov5_wrapper = YoLov5TRT(engine_file_path)
+
+    # 让 infer 使用可配置摄像头（你也可以继续写死 0，但参数更好）
+    yolov5_wrapper.infer(camera_index=args.camera)exit(1)
 
             
 
