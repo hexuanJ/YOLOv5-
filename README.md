@@ -375,7 +375,306 @@ YOLOv5-/
 ```
 
 ---
+## 📖 推理加速技术原理详解
 
+> 本节对项目中涉及的四种推理加速方式（PyTorch FP32 → FP16 → ONNX → TensorRT）所用到的专业术语和底层加速原理进行系统性说明。
+>
+> **一句话总结：所有加速技术本质上都在做三件事 —— 少算、少搬、少等。**
+
+---
+
+### 📊 四种推理方式对比
+
+| 方式 | 文件 | 速度 | 核心加速手段 |
+|------|------|------|------------|
+| PyTorch FP32 原生推理 | `demo.py` | ~10-15 FPS | 基线，无优化 |
+| PyTorch FP16 半精度 | `detect.py --half` | ~10 FPS (97.5ms) | 降低数值精度 + Tensor Core |
+| ONNX Runtime GPU | `detect.py --weights *.onnx` | **~40 FPS (24.9ms)** | 静态图 + C++ 引擎 + 算子融合 |
+| TensorRT | `yolo_trt_demo.py` | ~20 FPS* | 层融合 + Kernel 自动调优 + 精度校准 |
+
+> *TensorRT 测试环境为 Jetson Nano（128 CUDA Cores），若在 GPU 服务器运行理论上 ≥ ONNX 速度。
+
+---
+
+### 🔤 术语详解
+
+#### 1. 动态图 vs 静态图（Dynamic Graph vs Static Graph）
+
+| | 动态图（PyTorch） | 静态图（ONNX / TensorRT） |
+|---|---|---|
+| **工作方式** | 每帧推理时逐行解释 Python 代码，边定义边执行 | 导出时一次性追踪所有操作，保存为固定计算图 |
+| **是否需要 Python** | ✅ 每个算子都要回到 Python 解释器 | ❌ C++ 引擎内部直接执行，全程不需要 Python |
+| **能否全局优化** | ❌ 不知道下一步要算什么，无法提前优化 | ✅ 整张图已知，可做全局算子融合、内存规划 |
+| **类比** | 每做一步菜都翻一页菜谱 | 提前把菜谱背下来，一口气做完 |
+
+**为什么能加速？** 消除了 Python 解释器在每个算子之间的反复介入开销，并且允许编译器对整张计算图进行全局优化。
+
+本项目导出静态图的代码：
+```python
+# yolov5/export.py
+torch.onnx.export(
+    model, im, f,
+    do_constant_folding=True,  # 启用常量折叠优化
+    input_names=["images"],
+    output_names=output_names,
+)
+```
+
+---
+
+#### 2. Python 解释器开销（Interpreter Overhead）
+
+Python 是逐行翻译、逐行执行的解释型语言，并且有 **GIL（全局解释器锁）** 限制。
+
+PyTorch 推理时的执行流程如下：
+
+```
+Python 解释器: 处理 conv1(x)      ← 慢（~微秒级）
+    ↓
+CUDA Kernel:  执行卷积计算         ← 快（~微秒级）
+    ↓
+Python 解释器: 处理 bn1(result)   ← 慢
+    ↓
+CUDA Kernel:  执行归一化           ← 快
+    ↓
+... 几百个算子重复上述过程
+```
+
+**模型有几百个算子，每两个快速 GPU 操作之间都插入一次慢速 Python 调度，累积开销非常可观。** ONNX Runtime / TensorRT 将整个推理放在 C++ 引擎中一口气执行，Python 仅参与一次 `session.run()` 调用。
+
+---
+
+#### 3. FP32 / FP16 / INT8 — 数值精度（Numerical Precision）
+
+| 格式 | 位宽 | 精度 | 数值范围 |
+|------|------|------|---------|
+| **FP32**（单精度浮点） | 32 bit | ~7 位有效数字 | ±3.4 × 10³⁸ |
+| **FP16**（半精度浮点） | 16 bit | ~3-4 位有效数字 | ±65504 |
+| **INT8**（8 位整数） | 8 bit | 无小数 | -128 ~ 127 |
+
+本项目中 FP16 的核心代码：
+```python
+# yolov5/models/common.py — 推理时自动转换
+if self.fp16 and im.dtype != torch.float16:
+    im = im.half()  # 将输入从 FP32 转为 FP16
+
+# yolov5/export.py — 导出时转换模型
+if half and not coreml:
+    im, model = im.half(), model.half()  # 模型权重转为 FP16
+```
+
+**FP16 为什么能加速？（三个原因）**
+
+| 原因 | 说明 |
+|------|------|
+| **① 数据量减半，带宽翻倍** | 同一张 640×640 特征图：FP32 = 1.56 MB → FP16 = 0.78 MB，相同显存带宽下传输速度翻倍 |
+| **② 解锁 Tensor Core 硬件** | NVIDIA GPU 的 Tensor Core 专为 FP16 矩阵乘法设计，算力比普通 CUDA Core 高 8-16 倍 |
+| **③ 对检测精度影响极小** | YOLOv5 权重值通常在 -10 ~ +10 之间，FP16 精度足够，mAP 几乎不降 |
+
+---
+
+#### 4. 显存带宽（Memory Bandwidth）
+
+GPU 由**计算单���（CUDA Cores）** 和**显存（VRAM）** 组成，两者通过"数据通道"连接：
+
+```
+┌──────────────┐     显存带宽（如 900 GB/s）     ┌──────────┐
+│  CUDA Cores  │ ◄══════════════════════════════► │   VRAM   │
+│  (负责计算)   │                                  │ (存数据)  │
+└──────────────┘                                  └──────────┘
+```
+
+现代 GPU 的计算速度极快，但显存带宽增长跟不上，**CUDA Core 经常在"等数据"**。FP16 把数据量砍半，相当于同样的带宽能传输 2 倍数据，减少等待时间。
+
+---
+
+#### 5. Tensor Core
+
+NVIDIA GPU 上的**专用矩阵运算硬件单元**（Volta 架构 / 2017 年起），独立于普通 CUDA Core：
+
+| | 普通 CUDA Core | Tensor Core |
+|---|---|---|
+| **单次运算** | 1 次标量乘加：`a × b + c` | 1 次 4×4 矩阵乘加：`D = A×B + C`（128 次运算） |
+| **支持精度** | FP32 | FP16 / BF16 / INT8 / FP8 |
+| **适用场景** | 通用计算 | 神经网络卷积/矩阵乘法 |
+
+**关键：Tensor Core 只在 FP16（或更低精度）下启用。** 使用 `--half` 参数不仅是"数据小了一半"，更是解锁了专用硬件。
+
+---
+
+#### 6. 常量折叠（Constant Folding）
+
+在导出阶段**提前计算所有不依赖输入的常量表达���**，将结果直接存入模型，避免推理时重复计算。
+
+以 BatchNorm 为例：
+
+```
+优化前：BN(x) = γ × (x - μ) / √(σ² + ε) + β     ← 4 个参数，多次运算
+优化后：BN(x) = scale × x + bias                   ← 2 个常量，1 次乘加
+         (scale = γ/√(σ²+ε), bias = β - γμ/√(σ²+ε)，提前算好)
+```
+
+本项目在导出 ONNX 时启用了此优化：
+```python
+# yolov5/export.py
+torch.onnx.export(model, im, f, do_constant_folding=True, ...)
+```
+
+---
+
+#### 7. 算子融合（Operator / Layer Fusion）
+
+将多个连续的独立运算（算子）合并成一个，**大幅减少显存访问次数**。
+
+```
+未融合（3 个算子，6 次显存访问）:
+  Conv:  显存→读→算→写→显存
+  BN:    显存→读→算→写→显存
+  ReLU:  显存→读→算→写→显存
+
+融合后（1 个算子，2 次显存访问）:
+  Conv+BN+ReLU:  显存→读→卷积→归一化→激活→写→显存
+```
+
+**显存访问减少 3 倍！** 由于显存带宽是瓶颈，速度提升非常明显。
+
+TensorRT 能做更激进的融合：
+```
+YOLOv5 残差块:
+  未融合:  Conv → BN → SiLU → Conv → BN → SiLU → Add  (7 个算子)
+  融合后:  [FusedConvBNSiLU] → [FusedConvBNSiLU] → Add (3 个算子)
+  极致融合: [一个完整的残差块 Kernel]                      (1 个算子)
+```
+
+---
+
+#### 8. CUDA Kernel（核函数）
+
+Kernel 是 **GPU 上实际执行的一段并行程序**。调用一次卷积操作时，GPU 会启动一个卷积 Kernel，数千个 CUDA Core 同时并行执行。
+
+每次**启动 Kernel 都有固定开销**（约 5-20 微秒的线程调度和内存分配）：
+```
+100 个算子 → 100 次 Kernel Launch → 100 × 10μs = 1 ms 纯开销
+算子融合后 30 个 Kernel → 30 × 10μs = 0.3 ms
+```
+
+---
+
+#### 9. Kernel 自动调优（Auto-Tuning）
+
+同一个卷积操作可以有**多种 CUDA Kernel 实现**（直接卷积、im2col+GEMM、Winograd、FFT 等），不同 GPU 上的最优方案不同。
+
+TensorRT 在构建 Engine 时会：
+1. 枚举每一层所有可能的 Kernel 实现
+2. 在**当前 GPU 上实际运行**每种实现并测量时间
+3. 选出最快的方案保存到 `.engine` 文件
+
+**这就是为什么：**
+- 构建 Engine 很慢（几分钟~几十分钟）—— 在穷举试验
+- `.engine` 文件**不能跨 GPU 使用** —— 为 A 显卡选的最优方案换到 B 显卡不适用
+- 推理极快 —— 每一层都用了当前 GPU 上的最优实现
+
+对应本项目代码（`yolov5/export.py`）：
+```python
+# TensorRT 根据硬件选择最优 Kernel，并可启用 FP16
+if builder.platform_has_fast_fp16 and half:
+    config.set_flag(trt.BuilderFlag.FP16)
+```
+
+---
+
+#### 10. 内存池化 / 内存复用（Memory Pooling）
+
+静态图可以在执行前分析每个中间 Tensor 的"出生"和"死亡"时刻，**提前规划内存分配**，让不同时期的 Tensor 复用同一块显存空间。
+
+```
+Layer 1 output: tensor_A (10 MB)  ← 计算完 Layer 2 后就没用了
+Layer 2 output: tensor_B (20 MB)  ← 计算完 Layer 3 后就没用了
+Layer 3 output: tensor_C (10 MB)  ← 可以复用 tensor_A 的空间！
+
+不复用: 10 + 20 + 10 = 40 MB
+复用后: 20 + 10 = 30 MB (甚至更少)
+```
+
+动态图由于不知道下一步要算什么，只能在运行时动态申请/释放内存（`malloc/free`），开销更大。
+
+---
+
+#### 11. CUDA Stream（CUDA 流）与异步执行
+
+Stream 是 GPU 上的一条**任务队列**，同一 Stream 内��务按序执行，不同 Stream 可并行。`_async` 后缀表示 CPU 发出命令后不等 GPU 完成就继续下一行。
+
+对应本项目 TensorRT 推理代码（`yolo_trt_demo.py`）：
+```python
+stream = cuda.Stream()  # 创建 CUDA 流
+
+# 异步执行：传输→计算→回传，CPU 不阻塞等待
+cuda.memcpy_htod_async(self.cuda_inputs[0], self.host_inputs[0], self.stream)   # 数据传到 GPU
+self.context.execute_async(batch_size=1, bindings=self.bindings, stream_handle=self.stream.handle)  # GPU 计算
+cuda.memcpy_dtoh_async(self.host_outputs[0], self.cuda_outputs[0], self.stream)  # 结果传回 CPU
+self.stream.synchronize()  # 等待全部完成
+```
+
+异步执行让**数据传输和 GPU 计算可以重叠**，隐藏传输延迟。
+
+---
+
+#### 12. 死代码消除与公共子表达式合并
+
+| 优化手段 | 说明 | 示例 |
+|---------|------|------|
+| **死代码消除** | 删除推理时不需要的操作（如训练时的 loss 计算） | `loss = compute_loss(x)` → 推理时直接删除 |
+| **公共子表达式合并** | 两处计算了相同表达式，只算一次 | `a = x+y; b = x+y` → `a = x+y; b = a` |
+
+---
+
+### 🧠 加速技术全景图
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     推理加速全景图                              │
+│                                                              │
+│  ┌─ 减少 Python 开销 ──── 动态图 → 静态图                      │
+│  │                         (消除 Python 解释器反复介入)         │
+│  │                                                           │
+│  ├─ 减少数据搬运量 ─────── FP32 → FP16                        │
+│  │                         (数据量减半，显存带宽利用率翻倍)       │
+│  │                                                           │
+│  ├─ 减少显存访问次数 ───── 算子融合                             │
+│  │                         (多个 Kernel 合并为一个)            │
+│  │                                                           │
+│  ├─ 提前算好不重复算 ───── 常量折叠 + 死代码消除                 │
+│  │                                                           │
+│  ├─ 解锁专用硬件 ────────  FP16 → 启用 Tensor Core             │
+│  │                                                           │
+│  ├─ 选最优实现 ──────────  Kernel 自动调优（针对具体 GPU）       │
+│  │                                                           │
+│  ├─ 减少内存分配开销 ───── 内存池化 / 复用                      │
+│  │                                                           │
+│  └─ 隐藏传输延迟 ────────  CUDA Stream 异步执行                 │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### ⚙️ 性能优化金字塔
+
+```
+        ┌───────────────────────────┐
+        │    TensorRT (.engine)     │  ← 硬件级极致优化
+        │  层融合+自动调优+精度校准   │
+        ├───────────────────────────┤
+        │   ONNX Runtime GPU        │  ← 静态图+C++引擎
+        │  算子融合+CUDA加速         │
+        ├───────────────────────────┤
+        │   PyTorch FP16 (--half)   │  ← 降低精度
+        │  减少计算量+Tensor Core    │
+        ├───────────────────────────┤
+        │   PyTorch FP32 (原生)      │  ← 基线
+        │  动态图, Python 开销大     │
+        └───────────────────────────┘
+          灵活性高 ←────────→ 速度快
+```
+
+> 💡 **核心思路**：从「灵活但慢的动态 Python 框架」逐步走向「固化的、硬件定制的、高度优化的推理引擎」，每一步都在**牺牲灵活性换取速度**。
 ## 七、未来展望 & TODO
 
 - [x] ⚡ ONNX Runtime GPU 加速推理（实测 24.9ms/帧，较 PyTorch FP16 快 4 倍）
