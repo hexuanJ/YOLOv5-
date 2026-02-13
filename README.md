@@ -23,10 +23,12 @@
 
 本项目基于 **YOLOv5n** 轻量级目标检测模型，实现对工地现场人员 **个人防护装备 (PPE, Personal Protective Equipment)** 的实时智能检测。系统可识别6类目标：**人员 (person)**、**反光背心 (vest)**、**蓝色安全帽**、**红色安全帽**、**白色安全帽**、**黄色安全帽**，并通过 **IOU 关联算法** 将检测到的帽子和背心与人体框进行语义绑定，实现逐人状态判断（是否佩戴安全帽、是否穿着反光背心）。
 
-支持三种推理部署方式：
+支持多种推理部署方式：
 | 部署方式 | 文件 | 适用平台 | 预期帧率 |
 |---------|------|---------|---------|
 | **PyTorch 推理** | `demo.py` | PC (Windows/macOS/Linux) | ~10-15 FPS |
+| **PyTorch FP16 半精度** | `detect.py --half` | GPU 服务器 | ~10 FPS (97.5ms/帧) |
+| **ONNX GPU 加速** | `detect.py --weights *.onnx` | GPU 服务器 (CUDA 11.x) | **~40 FPS (24.9ms/帧)** |
 | **TensorRT 加速** | `yolo_trt_demo.py` | Jetson Nano / GPU 服务器 | ~20 FPS |
 | **DeepStream 管线** | `DeepStream6.0_Yolov5-6.0/` | Jetson Nano (NVIDIA 平台) | 最优 |
 
@@ -45,8 +47,9 @@
 - 采用 **图标浮层 (Overlay Icon)** 方式直观展示每位人员的装备佩戴状态，包括安全帽颜色和背心穿戴情况。
 - 当人员未佩戴安全帽或未穿反光背心时，显示对应的 **警告图标**，便于安全监管人员快速识别违规情况。
 
-### 4. 🚀 三级推理部署架构
+### 4. 🚀 四级推理部署架构
 - **PC 端 PyTorch**：快速验证与调试；
+- **ONNX Runtime GPU**：ONNX 模型 + CUDA GPU 加速，实现服务器端高速推理（24.9ms/帧）；
 - **Jetson TensorRT**：INT8/FP16 量化加速，实现边缘端实时推理；
 - **DeepStream 管线**：端到端 GPU 加速视频分析流水线，适用于多路视频流工业部署场景。
 
@@ -144,7 +147,116 @@ python demo.py
 python yolo_trt_demo.py
 ```
 
-### 🎯 5. DeepStream 部署
+### ⚡ 5. ONNX GPU 加速推理部署
+
+> 在 Tesla V100S-PCIE-32GB 上实测，ONNX GPU 推理速度为 **24.9ms/帧**，相比 PyTorch FP16（97.5ms/帧）快约 **4 倍**，相比 ONNX CPU 回退（357.7ms/帧）快约 **14 倍**。
+
+#### 实测性能对比（Tesla V100S-PCIE-32GB）
+
+| 推理方式 | 推理速度 (inference) | 加速比 | 状态 |
+|---------|---------------------|--------|------|
+| ONNX CPU（回退） | 357.7 ms | 1x（基准） | ❌ GPU 未启用 |
+| PyTorch FP16 | 97.5 ms | 3.7x | ✅ 可用 |
+| **ONNX GPU** | **24.9 ms** | **14.4x** | ✅ **最佳方案** |
+
+#### 测试环境
+
+| 项目 | 版本 |
+|------|------|
+| GPU | Tesla V100S-PCIE-32GB |
+| Python | 3.10.11 |
+| PyTorch | 2.0.1+cu118 |
+| ONNX Runtime GPU | 1.16.3 |
+| ONNX | 1.20.1 |
+
+#### 方式一：一键配置（推荐）
+
+```bash
+# 运行一键配置脚本
+chmod +x setup_onnx_gpu.sh
+./setup_onnx_gpu.sh
+```
+
+#### 方式二：手动配置
+
+**Step 1：安装依赖**
+
+```bash
+# 安装 ONNX 相关
+pip install onnx
+pip uninstall onnxruntime onnxruntime-gpu -y 2>/dev/null
+pip install onnxruntime-gpu==1.16.3
+
+# 安装 NVIDIA CUDA 运行时库
+pip install nvidia-cuda-runtime-cu11 nvidia-cublas-cu11 nvidia-curand-cu11 \
+            nvidia-cusolver-cu11 nvidia-cusparse-cu11 nvidia-cufft-cu11
+```
+
+> ⚠️ `onnxruntime-gpu` 必须安装 **1.16.3** 版本，该版本兼容 CUDA 11.8。默认 `pip install onnxruntime-gpu` 会安装最新版（要求 CUDA 12），与 CUDA 11.x 环境不兼容。
+
+**Step 2：创建符号链接**
+
+PyTorch 自带的 `libnvrtc` 文件名带有哈希后缀，cuDNN 加载时找不到，需要创建符号链接：
+
+```bash
+TORCH_LIB=$(python -c "import torch; print(torch.__path__[0])")/lib
+NVRTC_FILE=$(ls ${TORCH_LIB}/libnvrtc-*.so.* 2>/dev/null | head -1)
+ln -sf "$NVRTC_FILE" "${TORCH_LIB}/libnvrtc.so"
+```
+
+**Step 3：设置环境变量**
+
+```bash
+export LD_LIBRARY_PATH=$(python -c "import torch; print(torch.__path__[0])")/lib:/usr/local/lib/python3.10/site-packages/nvidia/curand/lib:/usr/local/lib/python3.10/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.10/site-packages/nvidia/cusolver/lib:/usr/local/lib/python3.10/site-packages/nvidia/cusparse/lib:/usr/local/lib/python3.10/site-packages/nvidia/cufft/lib:$LD_LIBRARY_PATH
+```
+
+如需持久化（重启终端自动生效），将上述 `export` 命令追加到 `~/.bashrc`：
+
+```bash
+echo 'export LD_LIBRARY_PATH=...(同上)...' >> ~/.bashrc
+```
+
+**Step 4：验证 ONNX GPU**
+
+```bash
+python -c "import onnxruntime as ort; print('Providers:', ort.get_available_providers())"
+```
+
+输出中应包含 `CUDAExecutionProvider`。
+
+**Step 5：导出 ONNX 模型**
+
+```bash
+cd yolov5
+python export.py --weights yolov5n.pt --include onnx --device 0 --simplify
+```
+
+> ⚠️ 推荐使用 **FP32** 导出（不加 `--half`），避免推理时数据类型不匹配。
+
+**Step 6：ONNX GPU 推理**
+
+```bash
+# 对图片推理
+python detect.py --weights yolov5n.onnx --source data/images/ --device 0 --name result --exist-ok
+
+# 对视频推理
+python detect.py --weights yolov5n.onnx --source video.mp4 --device 0 --name result --exist-ok
+```
+
+#### 常见问题
+
+| 错误信息 | 原因 | 解决方案 |
+|---------|------|---------|
+| `Require cuDNN 9.* and CUDA 12.*` | onnxruntime-gpu 版本过高 | `pip install onnxruntime-gpu==1.16.3` |
+| `libcurand.so.10: cannot open` | 缺少 CUDA 库 | `pip install nvidia-curand-cu11` |
+| `libcufft.so.10: cannot open` | 缺少 cufft 库 | `pip install nvidia-cufft-cu11` |
+| `libnvrtc.so: cannot open` | PyTorch 库文件名带哈希 | 创建 `libnvrtc.so` 符号链接（见 Step 2） |
+| `expected: (tensor(float16))` | 模型用 --half 导出 | 重新导出 FP32 模型（去掉 `--half`） |
+| `Failed to open 0` | 云服务器无摄像头 | 使用图片/视频作为 `--source` |
+
+---
+
+### 🎯 6. DeepStream 部署
 
 Deepstream 参考 NVIDIA DeepStream SDK 描述运行，对应目录：`DeepStream6.0_Yolov5-6.0`。
 
@@ -244,6 +356,7 @@ yellow     121         94     0.767     0.676     0.746     0.387
 YOLOv5-/
 ├── demo.py                          # PyTorch 推理主程序
 ├── yolo_trt_demo.py                 # TensorRT 加速推理
+├── setup_onnx_gpu.sh                # ONNX GPU 一键配置脚本
 ├── weights/                         # 模型权重文件目录
 │   └── ppe_yolo_n.pt               # YOLOv5n PPE 检测权重
 ├── icons/                           # 状态显示图标
@@ -265,6 +378,7 @@ YOLOv5-/
 
 ## 七、未来展望 & TODO
 
+- [x] ⚡ ONNX Runtime GPU 加速推理（实测 24.9ms/帧，较 PyTorch FP16 快 4 倍）
 - [ ] 🔄 引入目标跟踪（如 ByteTrack / DeepSORT），实现跨帧人员 ID 追踪
 - [ ] 📢 增加告警机制：未佩戴 PPE 时触发声音/消息告警
 - [ ] 🌐 开发 Web 端可视化界面，支持远程监控
@@ -290,9 +404,3 @@ YOLOv5-/
 本项目仅供个人学习和研究使用。模型基于 YOLOv5 ([AGPL-3.0 License](https://github.com/ultralytics/yolov5/blob/master/LICENSE))。
 
 ---
-
-<div align="center">
-
-**如果本项目对你有帮助，欢迎 ⭐ Star 支���！**
-
-</div>
