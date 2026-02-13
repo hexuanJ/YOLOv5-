@@ -339,7 +339,7 @@ YOLOv5-/
 ```
 
 ---
-## 📖 推理加速技术原理详解
+## 七、 推理加速技术原理详解
 
 > 本节对项目中涉及的四种推理加速方式（PyTorch FP32 → FP16 → ONNX）所用到的专业术语和底层加速原理进行系统性说明。
 >
@@ -564,20 +564,10 @@ Kernel 是 **GPU 上实际执行的一段并行程序**。调用一次卷积操�
 ```
 
 > 💡 **核心思路**：从「灵活但慢的动态 Python 框架」逐步走向「固化的、硬件定制的、高度优化的推理引擎」，每一步都在**牺牲灵活性换取速度**。
-## 七、未来展望 & TODO
-
-- [x] ⚡ ONNX Runtime GPU 加速推理（实测 24.9ms/帧，较 PyTorch FP16 快 4 倍）
-- [ ] 🔄 引入目标跟踪（如 ByteTrack / DeepSORT），实现跨帧人员 ID 追踪
-- [ ] 📢 增加告警机制：未佩戴 PPE 时触发声音/消息告警
-- [ ] 🌐 开发 Web 端可视化界面，支持远程监控
-- [ ] 📈 使用更大数据集重新训练，提升白色安全帽等难识别类别的精度
-- [ ] 🔧 支持 YOLOv8 / YOLO11 等新一代模型的迁移适配
-- [ ] 🎥 支持多路 RTSP 视频流同时检测
-- [ ] 📱 移植到 Android / iOS 移动端
 
 ---
 
-## 八、参考与致谢
+## 七、参考与致谢
 
 - [Ultralytics YOLOv5](https://github.com/ultralytics/yolov5)
 - [TensorRTx](https://github.com/wang-xinyu/tensorrtx)
