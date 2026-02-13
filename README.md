@@ -29,31 +29,24 @@
 | **PyTorch 推理** | `demo.py` | PC (Windows/macOS/Linux) | ~10-15 FPS |
 | **PyTorch FP16 半精度** | `detect.py --half` | GPU 服务器 | ~10 FPS (97.5ms/帧) |
 | **ONNX GPU 加速** | `detect.py --weights *.onnx` | GPU 服务器 (CUDA 11.x) | **~40 FPS (24.9ms/帧)** |
-| **TensorRT 加速** | `yolo_trt_demo.py` | Jetson Nano / GPU 服务器 | ~20 FPS |
-| **DeepStream 管线** | `DeepStream6.0_Yolov5-6.0/` | Jetson Nano (NVIDIA 平台) | 最优 |
+
 
 ---
 
 ## 🔬 创新点与技术亮点
 
 ### 1. 💡 轻量化模型选择 — YOLOv5n
-- 选用 YOLOv5 **Nano** 版本（仅 **1.9M 参数量**，**4.5 GFLOPs**），在保证检测精度的前提下大幅降低计算需求，使得模型可以在 **Jetson Nano** 等边缘设备上实现实时推理。
+- 选用 YOLOv5 **Nano** 版本（仅 **1.9M 参数量**，**4.5 GFLOPs**），在保证检测精度的前提下大幅降低计算需求。
 
 ### 2. 🧠 基于 IOU 的人-装备语义关联
-- 传统检测仅输出独立的目标框。本项目创新性地引入 **IOU（交并比）关联机制**，通过计算人体框与帽子框/背心框的 IOU 值，将装备检测结果绑定到对应人员，实现 **逐人安全状态判断**。
+- 传统检测仅输出独立的目标框。本项目引入 **IOU（交并比）关联机制**，通过计算人体框与帽子框/背心框的 IOU 值，将装备检测结果绑定到对应人员，实现 **逐人安全状态判断**。
 - 该方法避免了复杂的 ReID 或 Tracking 算法，在保证关联准确性的同时具有极低的计算开销。
 
 ### 3. 🖼️ 状态可视化浮层渲染
 - 采用 **图标浮层 (Overlay Icon)** 方式直观展示每位人员的装备佩戴状态，包括安全帽颜色和背心穿戴情况。
 - 当人员未佩戴安全帽或未穿反光背心时，显示对应的 **警告图标**，便于安全监管人员快速识别违规情况。
 
-### 4. 🚀 四级推理部署架构
-- **PC 端 PyTorch**：快速验证与调试；
-- **ONNX Runtime GPU**：ONNX 模型 + CUDA GPU 加速，实现服务器端高速推理（24.9ms/帧）；
-- **Jetson TensorRT**：INT8/FP16 量化加速，实现边缘端实时推理；
-- **DeepStream 管线**：端到端 GPU 加速视频分析流水线，适用于多路视频流工业部署场景。
-
-### 5. 📊 多模型对比训练
+### 4. 📊 多模型对比训练
 - 同时训练了 YOLOv5 **n / s / m / n6** 四个规模的模型，提供完整的精度-速度 trade-off 参考，方便用户根据自身硬件条件选择最优模型。
 
 ---
@@ -95,9 +88,8 @@
 
 | 组件 | 说明 |
 |------|------|
-| **PC 端** | Windows 10/11（无需 GPU，有最好）或 macOS 均测试可行 |
+| **PC 端** | Windows 10/11（无需 GPU）或 macOS 均测试可行 |
 | **摄像头** | USB RGB 摄像头 |
-| **边缘设备** | NVIDIA Jetson Nano（可选，用于 TensorRT / DeepStream 部署） |
 
 ## 二、软件依赖
 
@@ -108,8 +100,6 @@
 | YOLOv5 | v6.0 |
 | OpenCV | >= 4.1.1 |
 | NumPy | >= 1.22.2 |
-| PyCUDA | （TensorRT 模式需要） |
-| TensorRT | （TensorRT 模式需要） |
 
 ## 三、快速开始
 
@@ -143,10 +133,6 @@ cd ..
 # PC 端 PyTorch 推理
 python demo.py
 
-# Jetson Nano TensorRT 加速推理 (~20FPS)
-python yolo_trt_demo.py
-```
-
 ### ⚡ 5. ONNX GPU 加速推理部署
 
 > 在 Tesla V100S-PCIE-32GB 上实测，ONNX GPU 推理速度为 **24.9ms/帧**，相比 PyTorch FP16（97.5ms/帧）快约 **4 倍**，相比 ONNX CPU 回退（357.7ms/帧）快约 **14 倍**。
@@ -155,9 +141,9 @@ python yolo_trt_demo.py
 
 | 推理方式 | 推理速度 (inference) | 加速比 | 状态 |
 |---------|---------------------|--------|------|
-| ONNX CPU（回退） | 357.7 ms | 1x（基准） | ❌ GPU 未启用 |
-| PyTorch FP16 | 97.5 ms | 3.7x | ✅ 可用 |
-| **ONNX GPU** | **24.9 ms** | **14.4x** | ✅ **最佳方案** |
+| ONNX CPU（回退） | 357.7 ms | 1x（基准） |  GPU 未启用 |
+| PyTorch FP16 | 97.5 ms | 3.7x | 可用 |
+| **ONNX GPU** | **24.9 ms** | **14.4x** | **最佳方案** |
 
 #### 测试环境
 
@@ -256,16 +242,6 @@ python detect.py --weights yolov5n.onnx --source video.mp4 --device 0 --name res
 
 ---
 
-### 🎯 6. DeepStream 部署
-
-Deepstream 参考 NVIDIA DeepStream SDK 描述运行，对应目录：`DeepStream6.0_Yolov5-6.0`。
-
-具体参考：
-- TensorRT Engine 生成: https://github.com/wang-xinyu/tensorrtx/tree/master/yolov5
-- DeepStream-YOLO: https://github.com/marcoslucianops/DeepStream-Yolo
-
----
-
 ## 四、模型评估
 
 ### Ground Truths vs 预测对比
@@ -338,16 +314,6 @@ yellow     121         94     0.767     0.676     0.746     0.387
 | `render_frame()` | 在画面上绘制检测框、置信度文本、状态图标浮层 |
 | `detect()` | 主循环：读取帧 → 推理 → 关联 → 渲染 → 显示 |
 
-### 📄 `yolo_trt_demo.py` — TensorRT 加速推理
-
-| 模块 | 功能 |
-|------|------|
-| `YoLov5TRT.__init__()` | 反序列化 TensorRT Engine，分配 CUDA Host/Device 缓存 |
-| `preprocess_image()` | BGR→RGB、等比缩放 + Padding、归一化、HWC→NCHW |
-| `xywh2xyxy()` | 将模型输出的中心点+宽高格式转换为左上右下角点坐标 |
-| `non_max_suppression()` | 手写 NMS（非极大值抑制），过滤冗余框 |
-| `infer()` | 主循环：CUDA 推理 → 后处理 → 绘制 → 显示 |
-
 ---
 
 ## 六、项目结构
@@ -355,7 +321,6 @@ yellow     121         94     0.767     0.676     0.746     0.387
 ```
 YOLOv5-/
 ├── demo.py                          # PyTorch 推理主程序
-├── yolo_trt_demo.py                 # TensorRT 加速推理
 ├── setup_onnx_gpu.sh                # ONNX GPU 一键配置脚本
 ├── weights/                         # 模型权重文件目录
 │   └── ppe_yolo_n.pt               # YOLOv5n PPE 检测权重
@@ -370,29 +335,25 @@ YOLOv5-/
 │   └── hat_off.png                  # 未戴帽子警告图标
 ├── imgs/                            # 验证集可视化结果
 ├── yolov5/                          # YOLOv5 框架（需自行 clone）
-├── DeepStream6.0_Yolov5-6.0/       # DeepStream 部署配置
 └── README.md                        # 项目说明文档
 ```
 
 ---
 ## 📖 推理加速技术原理详解
 
-> 本节对项目中涉及的四种推理加速方式（PyTorch FP32 → FP16 → ONNX → TensorRT）所用到的专业术语和底层加速原理进行系统性说明。
+> 本节对项目中涉及的四种推理加速方式（PyTorch FP32 → FP16 → ONNX）所用到的专业术语和底层加速原理进行系统性说明。
 >
-> **一句话总结：所有加速技术本质上都在做三件事 —— 少算、少搬、少等。**
+> **总结：所有加速技术本质上都在做三件事 —— 少算、少搬、少等。**
 
 ---
 
-### 📊 四种推理方式对比
+### 📊 三种推理方式对比
 
 | 方式 | 文件 | 速度 | 核心加速手段 |
 |------|------|------|------------|
 | PyTorch FP32 原生推理 | `demo.py` | ~10-15 FPS | 基线，无优化 |
 | PyTorch FP16 半精度 | `detect.py --half` | ~10 FPS (97.5ms) | 降低数值精度 + Tensor Core |
 | ONNX Runtime GPU | `detect.py --weights *.onnx` | **~40 FPS (24.9ms)** | 静态图 + C++ 引擎 + 算子融合 |
-| TensorRT | `yolo_trt_demo.py` | ~20 FPS* | 层融合 + Kernel 自动调优 + 精度校准 |
-
-> *TensorRT 测试环境为 Jetson Nano（128 CUDA Cores），若在 GPU 服务器运行理论上 ≥ ONNX 速度。
 
 ---
 
@@ -440,7 +401,7 @@ CUDA Kernel:  执行归一化           ← 快
 ... 几百个算子重复上述过程
 ```
 
-**模型有几百个算子，每两个快速 GPU 操作之间都插入一次慢速 Python 调度，累积开销非常可观。** ONNX Runtime / TensorRT 将整个推理放在 C++ 引擎中一口气执行，Python 仅参与一次 `session.run()` 调用。
+**模型有几百个算子，每两个快速 GPU 操作之间都插入一次慢速 Python 调度，累积开销非常可观。** ONNX Runtime 将整个推理放在 C++ 引擎中一口气执行，Python 仅参与一次 `session.run()` 调用。
 
 ---
 
@@ -560,73 +521,6 @@ Kernel 是 **GPU 上实际执行的一段并行程序**。调用一次卷积操�
 
 ---
 
-#### 9. Kernel 自动调优（Auto-Tuning）
-
-同一个卷积操作可以有**多种 CUDA Kernel 实现**（直接卷积、im2col+GEMM、Winograd、FFT 等），不同 GPU 上的最优方案不同。
-
-TensorRT 在构建 Engine 时会：
-1. 枚举每一层所有可能的 Kernel 实现
-2. 在**当前 GPU 上实际运行**每种实现并测量时间
-3. 选出最快的方案保存到 `.engine` 文件
-
-**这就是为什么：**
-- 构建 Engine 很慢（几分钟~几十分钟）—— 在穷举试验
-- `.engine` 文件**不能跨 GPU 使用** —— 为 A 显卡选的最优方案换到 B 显卡不适用
-- 推理极快 —— 每一层都用了当前 GPU 上的最优实现
-
-对应本项目代码（`yolov5/export.py`）：
-```python
-# TensorRT 根据硬件选择最优 Kernel，并可启用 FP16
-if builder.platform_has_fast_fp16 and half:
-    config.set_flag(trt.BuilderFlag.FP16)
-```
-
----
-
-#### 10. 内存池化 / 内存复用（Memory Pooling）
-
-静态图可以在执行前分析每个中间 Tensor 的"出生"和"死亡"时刻，**提前规划内存分配**，让不同时期的 Tensor 复用同一块显存空间。
-
-```
-Layer 1 output: tensor_A (10 MB)  ← 计算完 Layer 2 后就没用了
-Layer 2 output: tensor_B (20 MB)  ← 计算完 Layer 3 后就没用了
-Layer 3 output: tensor_C (10 MB)  ← 可以复用 tensor_A 的空间！
-
-不复用: 10 + 20 + 10 = 40 MB
-复用后: 20 + 10 = 30 MB (甚至更少)
-```
-
-动态图由于不知道下一步要算什么，只能在运行时动态申请/释放内存（`malloc/free`），开销更大。
-
----
-
-#### 11. CUDA Stream（CUDA 流）与异步执行
-
-Stream 是 GPU 上的一条**任务队列**，同一 Stream 内��务按序执行，不同 Stream 可并行。`_async` 后缀表示 CPU 发出命令后不等 GPU 完成就继续下一行。
-
-对应本项目 TensorRT 推理代码（`yolo_trt_demo.py`）：
-```python
-stream = cuda.Stream()  # 创建 CUDA 流
-
-# 异步执行：传输→计算→回传，CPU 不阻塞等待
-cuda.memcpy_htod_async(self.cuda_inputs[0], self.host_inputs[0], self.stream)   # 数据传到 GPU
-self.context.execute_async(batch_size=1, bindings=self.bindings, stream_handle=self.stream.handle)  # GPU 计算
-cuda.memcpy_dtoh_async(self.host_outputs[0], self.cuda_outputs[0], self.stream)  # 结果传回 CPU
-self.stream.synchronize()  # 等待全部完成
-```
-
-异步执行让**数据传输和 GPU 计算可以重叠**，隐藏传输延迟。
-
----
-
-#### 12. 死代码消除与公共子表达式合并
-
-| 优化手段 | 说明 | 示例 |
-|---------|------|------|
-| **死代码消除** | 删除推理时不需要的操作（如训练时的 loss 计算） | `loss = compute_loss(x)` → 推理时直接删除 |
-| **公共子表达式合并** | 两处计算了相同表达式，只算一次 | `a = x+y; b = x+y` → `a = x+y; b = a` |
-
----
 
 ### 🧠 加速技术全景图
 
@@ -649,18 +543,13 @@ self.stream.synchronize()  # 等待全部完成
 │  │                                                           │
 │  ├─ 选最优实现 ──────────  Kernel 自动调优（针对具体 GPU）       │
 │  │                                                           │
-│  ├─ 减少内存分配开销 ───── 内存池化 / 复用                      │
-│  │                                                           │
-│  └─ 隐藏传输延迟 ────────  CUDA Stream 异步执行                 │
+│  ├─ 减少内存分配开销 ───── 内存池化 / 复用                      │                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ### ⚙️ 性能优化金字塔
 
 ```
-        ┌───────────────────────────┐
-        │    TensorRT (.engine)     │  ← 硬件级极致优化
-        │  层融合+自动调优+精度校准   │
         ├───────────────────────────┤
         │   ONNX Runtime GPU        │  ← 静态图+C++引擎
         │  算子融合+CUDA加速         │
