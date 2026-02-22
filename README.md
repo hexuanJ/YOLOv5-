@@ -2,7 +2,7 @@
 
 # 🏗️ YOLOv5n 工地 PPE 智能防护检测系统
 
-**基于 YOLOv5n + TensorRT + DeepStream 的实时工地安全装备检测方案**
+**基于 YOLOv5n的实时工地安全装备检测方案**
 
 ![](https://enpei-md.oss-cn-hangzhou.aliyuncs.com/img20220404103032.png?x-oss-process=style/wp)
 
